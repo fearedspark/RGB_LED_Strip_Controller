@@ -44,23 +44,27 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "math.h"
-#define NLEDS 30
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+typedef enum
+{
+  NEO_PIXEL = 0,
+  DOT_STAR
+} ModeTypedef;
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+#define NLEDS 144
+#define BUFFER_NUMBER 2
 //Mode: NeoPixel = 0, DotStar = 2 != 0
 #define ModeInput() GPIOB->IDR & 0x00000002
 #define GetColorRotB() GPIOA->IDR & 0x00000002
 #define GetPwrRotB() GPIOA->IDR & 0x00000008
 #define HUE_INCREMENT 2
 #define INTENSITY_INCREMENT 0.05
-/* USER CODE END Includes */
-
-/* Private typedef -----------------------------------------------------------*/
-/* USER CODE BEGIN PTD */
-
-/* USER CODE END PTD */
-
-/* Private define ------------------------------------------------------------*/
-/* USER CODE BEGIN PD */
-
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -72,15 +76,11 @@
 SPI_HandleTypeDef hspi1;
 DMA_HandleTypeDef hdma_spi1_tx;
 
-TIM_HandleTypeDef htim1;
-
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
-uint32_t colors_buffer[NLEDS+2];
-uint32_t * colors_array = colors_buffer + 1;
-double LedIntensity = 0;
-double LedHue = 0;
-uint32_t DisplayWhite = 1;
+volatile double LedIntensity = 0;
+volatile double LedHue = 0;
+volatile uint32_t DisplayWhite = 1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -88,18 +88,39 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_SPI1_Init(void);
-static void MX_TIM1_Init(void);
 /* USER CODE BEGIN PFP */
 /* Private function prototypes -----------------------------------------------*/
 uint32_t RGB(uint8_t R, uint8_t G, uint8_t B);
 uint32_t Hue2RGB(double H, double V);
-void TransmitNeopixel(uint32_t * colors);
-void TransmitDotstar(uint32_t * colors);
+void TransmitNeopixel(uint32_t * colors, uint32_t length);
+void TransmitDotstar(uint32_t * colors, uint32_t length);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+// Initializes peripherals to read PB1 and return the mode
+ModeTypedef ReadMode(void)
+{
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
 
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK|RCC_CLOCKTYPE_PCLK1;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1);
+
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  GPIO_InitStruct.Pin = Mode_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(Mode_GPIO_Port, &GPIO_InitStruct);
+
+  if(HAL_GPIO_ReadPin(Mode_GPIO_Port, Mode_Pin) == GPIO_PIN_RESET)
+    return NEO_PIXEL;
+  else
+    return DOT_STAR;
+}
 /* USER CODE END 0 */
 
 /**
@@ -109,8 +130,27 @@ void TransmitDotstar(uint32_t * colors);
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-  int i;
-	double f;
+  uint32_t colors_buffer[BUFFER_NUMBER * (NLEDS + 2)];
+  uint32_t * colors_arrays[BUFFER_NUMBER];
+  int current_buffer = 0;
+  ModeTypedef led_mode = ReadMode();
+  if(led_mode == DOT_STAR)
+  {
+    for(int i = 0; i < BUFFER_NUMBER; i++)
+    {
+      colors_arrays[i] = colors_buffer + i * (NLEDS + 2) + 1;
+      colors_buffer[i * (NLEDS + 2)] = 0x00000000;
+      colors_buffer[(i + 1) * (NLEDS + 2) - 1] = 0xFFFFFFFF;
+    }
+  }
+  else
+  {
+    for(int i = 0; i < BUFFER_NUMBER; i++)
+    {
+      colors_arrays[i] = colors_buffer + i * NLEDS;
+    }
+  }
+  
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -133,10 +173,8 @@ int main(void)
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_SPI1_Init();
-  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
-  colors_buffer[0] = 0x00000000;
-	colors_buffer[NLEDS + 1] = 0xFFFFFFFF;
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -147,15 +185,19 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    for(f = 0; f < 360.0; f += 0.1)
-		{
-			for(i = 0; i < NLEDS; i++)
-				if(DisplayWhite)
-					colors_array[i] = RGB(255.0*LedIntensity, 255.0*LedIntensity, 255.0*LedIntensity);
-				else
-					colors_array[i] = Hue2RGB(LedHue, LedIntensity);
-			TransmitDotstar(colors_buffer);
-		}
+    uint32_t color = 0;
+    if(DisplayWhite)
+      color = RGB(255.0*LedIntensity, 255.0*LedIntensity, 255.0*LedIntensity);
+    else
+      color = Hue2RGB(LedHue, LedIntensity);
+    
+    for(int i = 0; i < NLEDS; i++)
+      colors_arrays[current_buffer][i] = color;
+    if(led_mode == DOT_STAR)
+      TransmitDotstar(colors_arrays[current_buffer] - 1, NLEDS + 2);
+    else
+      TransmitNeopixel(colors_arrays[current_buffer], NLEDS);
+    current_buffer = (current_buffer + 1) % BUFFER_NUMBER;
   }
   /* USER CODE END 3 */
 }
@@ -233,52 +275,6 @@ static void MX_SPI1_Init(void)
   /* USER CODE BEGIN SPI1_Init 2 */
 
   /* USER CODE END SPI1_Init 2 */
-
-}
-
-/**
-  * @brief TIM1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM1_Init(void)
-{
-
-  /* USER CODE BEGIN TIM1_Init 0 */
-
-  /* USER CODE END TIM1_Init 0 */
-
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-
-  /* USER CODE BEGIN TIM1_Init 1 */
-
-  /* USER CODE END TIM1_Init 1 */
-  htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 0;
-  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 12;
-  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim1.Init.RepetitionCounter = 0;
-  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
-  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM1_Init 2 */
-
-  /* USER CODE END TIM1_Init 2 */
 
 }
 
@@ -374,16 +370,16 @@ uint32_t Hue2RGB(double H, double V)
     }
 }
 
-void TransmitNeopixel(uint32_t * colors)
+void TransmitNeopixel(uint32_t * colors, uint32_t length)
 {
 }
 
-void TransmitDotstar(uint32_t * colors)
+void TransmitDotstar(uint32_t * colors, uint32_t length)
 {
 	HAL_StatusTypeDef spi_status;
 	do
 	{
-		spi_status = HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)colors, (NLEDS+2)*4);
+		spi_status = HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)colors, length * 4);
 	}
 	while(spi_status == HAL_BUSY);
 }
