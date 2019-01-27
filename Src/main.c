@@ -43,7 +43,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "math.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -57,14 +57,14 @@ typedef enum
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define NLEDS 144
+#define NLEDS 288
 #define BUFFER_NUMBER 2
-//Mode: NeoPixel = 0, DotStar = 2 != 0
-#define ModeInput() GPIOB->IDR & 0x00000002
-#define GetColorRotB() GPIOA->IDR & 0x00000002
-#define GetPwrRotB() GPIOA->IDR & 0x00000008
+#define GetColorRotB() (GPIOA->IDR & 0x00000002)
+#define GetPwrRotB() (GPIOA->IDR & 0x00000008)
 #define HUE_INCREMENT 2
-#define INTENSITY_INCREMENT 0.05
+#define INTENSITY_INCREMENT 5
+
+#define ABS(x) (((x)<0)?-(x):(x))
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -78,9 +78,12 @@ DMA_HandleTypeDef hdma_spi1_tx;
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
-volatile double LedIntensity = 0;
-volatile double LedHue = 0;
+volatile int LedIntensity = 0; // 0-100
+volatile int LedHue = 0;       // 0-359
 volatile uint32_t DisplayWhite = 1;
+
+// Set as a global variable to be included in memory estimation
+uint32_t colors_buffer[BUFFER_NUMBER * (NLEDS + 2)];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -91,7 +94,7 @@ static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
 /* Private function prototypes -----------------------------------------------*/
 uint32_t RGB(uint8_t R, uint8_t G, uint8_t B);
-uint32_t Hue2RGB(double H, double V);
+uint32_t Hue2RGB(int H, int V);
 void TransmitNeopixel(uint32_t * colors, uint32_t length);
 void TransmitDotstar(uint32_t * colors, uint32_t length);
 /* USER CODE END PFP */
@@ -130,7 +133,6 @@ ModeTypedef ReadMode(void)
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-  uint32_t colors_buffer[BUFFER_NUMBER * (NLEDS + 2)];
   uint32_t * colors_arrays[BUFFER_NUMBER];
   int current_buffer = 0;
   ModeTypedef led_mode = ReadMode();
@@ -187,7 +189,10 @@ int main(void)
     /* USER CODE BEGIN 3 */
     uint32_t color = 0;
     if(DisplayWhite)
-      color = RGB(255.0*LedIntensity, 255.0*LedIntensity, 255.0*LedIntensity);
+    {
+      int color_intensity = (LedIntensity * 255) / 100;
+      color = RGB(color_intensity, color_intensity, color_intensity);
+    }
     else
       color = Hue2RGB(LedHue, LedIntensity);
     
@@ -342,29 +347,36 @@ uint32_t RGB(uint8_t R, uint8_t G, uint8_t B)
     return __REV(0xFF000000 | (uint32_t)B << 16 | (uint32_t)G << 8 | (uint32_t)R);
 }
 
-uint32_t Hue2RGB(double H, double V)
+uint32_t Hue2RGB(int H, int V)
 {
-    H = fmod(H, 360);
-    if(V > 1)
-        V = 1;
+    // H = [0:359]
+    // V = [0:100]
+    if(V > 100)
+        V = 100;
     if(V < 0)
         V = 0;
-    double X = V * (1 - fabs(fmod(H / 60, 2) - 1));
-    int S = ((uint32_t)H) / 60;
+    H %= 360;
+    if(H < 0)
+      H += 360;
+    int X = (V * 255 * (1 - ABS(((H / 60) % 2) - 1))) / 100;
+    V = (V * 255) / 100;
+    if(X > 255)
+      X = 255;
+    int S = H / 60;
     switch(S)
     {
         case 0:
-            return RGB((uint8_t)(V*255), (uint8_t)(X*255), 0);
+            return RGB((uint8_t)V, (uint8_t)X, 0);
         case 1:
-            return RGB((uint8_t)(X*255), (uint8_t)(V*255), 0);
+            return RGB((uint8_t)X, (uint8_t)V, 0);
         case 2:
-            return RGB(0, (uint8_t)(V*255), (uint8_t)(X*255));
+            return RGB(0, (uint8_t)V, (uint8_t)X);
         case 3:
-            return RGB(0, (uint8_t)(X*255), (uint8_t)(V*255));
+            return RGB(0, (uint8_t)X, (uint8_t)V);
         case 4:
-            return RGB((uint8_t)(X*255), 0, (uint8_t)(V*255));
+            return RGB((uint8_t)X, 0, (uint8_t)V);
         case 5:
-            return RGB((uint8_t)(V*255), 0, (uint8_t)(X*255));
+            return RGB((uint8_t)V, 0, (uint8_t)X);
         default:
             return RGB(0, 0, 0);
     }
@@ -394,7 +406,9 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 				LedHue += HUE_INCREMENT;
 			else
 				LedHue -= HUE_INCREMENT;
-			LedHue = fmod(LedHue, 360);
+      LedHue %= 360;
+      if(LedHue < 0)
+        LedHue += 360;
 			break;
 		case ColorButton_Pin:
 			if(DisplayWhite)
@@ -407,8 +421,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 				LedIntensity += INTENSITY_INCREMENT;
 			else
 				LedIntensity -= INTENSITY_INCREMENT;
-			if(LedIntensity > 1)
-				LedIntensity = 1;
+			if(LedIntensity > 100)
+				LedIntensity = 100;
 			if(LedIntensity < 0)
 				LedIntensity = 0;
 			break;
@@ -416,7 +430,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 			if(LedIntensity > 0)
 				LedIntensity = 0;
 			else
-				LedIntensity = 1;
+				LedIntensity = 100;
 			break;
 	}
 }
