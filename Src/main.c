@@ -81,6 +81,7 @@ DMA_HandleTypeDef hdma_spi1_tx;
 volatile int LedIntensity = 0; // 0-100
 volatile int LedHue = 0;       // 0-359
 volatile uint32_t DisplayWhite = 1;
+volatile int HasColorChanged = 1;
 
 // Set as a global variable to be included in memory estimation
 uint32_t colors_buffer[BUFFER_NUMBER * (NLEDS + 2)];
@@ -133,6 +134,7 @@ ModeTypedef ReadMode(void)
 int main(void)
 {
   /* USER CODE BEGIN 1 */
+  uint32_t color = 0;
   uint32_t * colors_arrays[BUFFER_NUMBER];
   int current_buffer = 0;
   ModeTypedef led_mode = ReadMode();
@@ -150,6 +152,14 @@ int main(void)
     for(int i = 0; i < BUFFER_NUMBER; i++)
     {
       colors_arrays[i] = colors_buffer + i * NLEDS;
+    }
+  }
+
+  for(int b = 0; b < BUFFER_NUMBER; b++)
+  {
+    for(int i = 0; i < NLEDS; i++)
+    {
+      colors_arrays[b][i] = color;
     }
   }
   
@@ -187,22 +197,25 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    uint32_t color = 0;
-    if(DisplayWhite)
+    if(HasColorChanged)
     {
-      int color_intensity = (LedIntensity * 255) / 100;
-      color = RGB(color_intensity, color_intensity, color_intensity);
+      HasColorChanged = 0;
+      if(DisplayWhite)
+      {
+        int color_intensity = (LedIntensity * 255) / 100;
+        color = RGB(color_intensity, color_intensity, color_intensity);
+      }
+      else
+        color = Hue2RGB(LedHue, LedIntensity);
+      
+      for(int i = 0; i < NLEDS; i++)
+        colors_arrays[current_buffer][i] = color;
+      if(led_mode == DOT_STAR)
+        TransmitDotstar(colors_arrays[current_buffer] - 1, NLEDS + 2);
+      else
+        TransmitNeopixel(colors_arrays[current_buffer], NLEDS);
+      current_buffer = (current_buffer + 1) % BUFFER_NUMBER;
     }
-    else
-      color = Hue2RGB(LedHue, LedIntensity);
-    
-    for(int i = 0; i < NLEDS; i++)
-      colors_arrays[current_buffer][i] = color;
-    if(led_mode == DOT_STAR)
-      TransmitDotstar(colors_arrays[current_buffer] - 1, NLEDS + 2);
-    else
-      TransmitNeopixel(colors_arrays[current_buffer], NLEDS);
-    current_buffer = (current_buffer + 1) % BUFFER_NUMBER;
   }
   /* USER CODE END 3 */
 }
@@ -433,6 +446,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 				LedIntensity = 100;
 			break;
 	}
+  HasColorChanged = 1;
 }
 /* USER CODE END 4 */
 

@@ -4,15 +4,9 @@
 
   Firmware for a RGB LED Strip Controller, to control NeoPixel or DotStar LED strips with a STM32F0 microcontroller
 
-## Known Issues
-
-  * None so far!
-
-## To do
+## To do list
 
   * Implement the NeoPixel protocol
-  * Send update only when data changed
-  * Put the microcontroller to sleep and wake up only on interrupts
 
 ## Hardware
 
